@@ -1,34 +1,6 @@
-/* * * * *
- * A unity voice processor
- * ------------------------------
- * 
- * A Unity script for recording and delivering frames of audio for real-time processing
- * 
- * Written by Picovoice 
- * 2021-02-19
- * 
- * Apache License
- * 
- * Copyright (c) 2021 Picovoice
- * 
- * Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
- *   
- *   http://www.apache.org/licenses/LICENSE-2.0
- *   
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- * 
- * * * * */
 using System;
-using System.Collections;
-using System.Collections.Generic;
+using Cysharp.Threading.Tasks;
 using UnityEngine;
-
 
 /// <summary>
 /// Class that records audio and delivers frames for real-time audio processing
@@ -73,7 +45,7 @@ public class VoiceProcessor : MonoBehaviour
     /// <summary>
     /// Available audio recording devices
     /// </summary>
-    public List<string> Devices { get; private set; }
+    public System.Collections.Generic.List<string> Devices { get; private set; }
 
     /// <summary>
     /// Index of selected audio recording device
@@ -108,14 +80,14 @@ public class VoiceProcessor : MonoBehaviour
     private bool _didDetect;
     private bool _transmit;
 
-
-    AudioClip _audioClip;
+    private AudioClip _audioClip;
     private event Action RestartRecording;
 
     void Awake()
     {
         UpdateDevices();
     }
+
 #if UNITY_EDITOR
     void Update()
     {
@@ -131,7 +103,7 @@ public class VoiceProcessor : MonoBehaviour
     /// </summary>
     public void UpdateDevices()
     {
-        Devices = new List<string>();
+        Devices = new System.Collections.Generic.List<string>();
         foreach (var device in Microphone.devices)
             Devices.Add(device);
 
@@ -164,7 +136,7 @@ public class VoiceProcessor : MonoBehaviour
             RestartRecording += () =>
             {
                 CurrentDeviceIndex = deviceIndex;
-                StartRecording(SampleRate, FrameLength);
+                StartRecording(SampleRate, FrameLength).Forget();
                 RestartRecording = null;
             };
             StopRecording();
@@ -181,11 +153,11 @@ public class VoiceProcessor : MonoBehaviour
     /// <param name="sampleRate">Sample rate to record at</param>
     /// <param name="frameSize">Size of audio frames to be delivered</param>
     /// <param name="autoDetect">Should the audio continuously record based on the volume</param>
-    public void StartRecording(int sampleRate = 16000, int frameSize = 512, bool ?autoDetect = null)
+    public async UniTask StartRecording(int sampleRate = 16000, int frameSize = 512, bool? autoDetect = null)
     {
         if (autoDetect != null)
         {
-            _autoDetect = (bool) autoDetect;
+            _autoDetect = (bool)autoDetect;
         }
 
         if (IsRecording)
@@ -195,7 +167,7 @@ public class VoiceProcessor : MonoBehaviour
             {
                 RestartRecording += () =>
                 {
-                    StartRecording(SampleRate, FrameLength, autoDetect);
+                    StartRecording(SampleRate, FrameLength, autoDetect).Forget();
                     RestartRecording = null;
                 };
                 StopRecording();
@@ -209,7 +181,10 @@ public class VoiceProcessor : MonoBehaviour
 
         _audioClip = Microphone.Start(CurrentDeviceName, true, 1, sampleRate);
 
-        StartCoroutine(RecordData());
+        if (OnRecordingStart != null)
+            OnRecordingStart.Invoke();
+
+        await RecordDataAsync();
     }
 
     /// <summary>
@@ -224,20 +199,15 @@ public class VoiceProcessor : MonoBehaviour
         Destroy(_audioClip);
         _audioClip = null;
         _didDetect = false;
-
-        StopCoroutine(RecordData());
     }
 
     /// <summary>
     /// Loop for buffering incoming audio data and delivering frames
     /// </summary>
-    IEnumerator RecordData()
+    private async UniTask RecordDataAsync()
     {
         float[] sampleBuffer = new float[FrameLength];
         int startReadPos = 0;
-
-        if (OnRecordingStart != null)
-            OnRecordingStart.Invoke();
 
         while (IsRecording)
         {
@@ -248,7 +218,7 @@ public class VoiceProcessor : MonoBehaviour
             int samplesAvailable = curClipPos - startReadPos;
             if (samplesAvailable < FrameLength)
             {
-                yield return null;
+                await UniTask.Yield();
                 continue;
             }
 
@@ -276,9 +246,10 @@ public class VoiceProcessor : MonoBehaviour
             }
 
             startReadPos = endReadPos % _audioClip.samples;
-            if (_autoDetect == false)
+
+            if (!_autoDetect)
             {
-                _transmit =_audioDetected = true;
+                _transmit = _audioDetected = true;
             }
             else
             {
@@ -294,7 +265,7 @@ public class VoiceProcessor : MonoBehaviour
 
                 if (maxVolume >= _minimumSpeakingSampleValue)
                 {
-                    _transmit= _audioDetected = true;
+                    _transmit = _audioDetected = true;
                     _timeAtSilenceBegan = Time.time;
                 }
                 else
@@ -315,7 +286,7 @@ public class VoiceProcessor : MonoBehaviour
                 short[] pcmBuffer = new short[sampleBuffer.Length];
                 for (int i = 0; i < FrameLength; i++)
                 {
-                    pcmBuffer[i] = (short) Math.Floor(sampleBuffer[i] * short.MaxValue);
+                    pcmBuffer[i] = (short)Math.Floor(sampleBuffer[i] * short.MaxValue);
                 }
 
                 // raise buffer event
@@ -332,7 +303,6 @@ public class VoiceProcessor : MonoBehaviour
                 }
             }
         }
-
 
         if (OnRecordingStop != null)
             OnRecordingStop.Invoke();

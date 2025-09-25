@@ -1,12 +1,12 @@
+using TMPro;
 using UnityEngine;
-using UnityEngine.UI;
 
 public class VoskResultText : MonoBehaviour 
 {
     public VoskSpeechToText VoskSpeechToText;
-    public Text ResultText;
+    public TMP_Text ResultText;
 
-    void Awake()
+    private void Awake()
     {
         VoskSpeechToText.OnTranscriptionResult += OnTranscriptionResult;
     }
