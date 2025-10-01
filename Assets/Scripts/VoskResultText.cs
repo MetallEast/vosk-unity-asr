@@ -1,29 +1,27 @@
+using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
 public class VoskResultText : MonoBehaviour 
 {
-    public VoskSpeechToText VoskSpeechToText;
-    public Text ResultText;
+    [SerializeField] private Button _voiceButton;
+    [SerializeField] private TMP_Text _text;
 
-    void Awake()
+    private void OnEnable()
     {
-        VoskSpeechToText.OnTranscriptionResult += OnTranscriptionResult;
+        _voiceButton.onClick.AddListener(OnClicked);
     }
 
-    private void OnTranscriptionResult(string obj)
+    private void OnDisable()
     {
-        Debug.Log(obj);
-        var result = new RecognitionResult(obj);
-        for (int i = 0; i < result.Phrases.Length; i++)
-        {
-            if (i > 0)
-            {
-                ResultText.text += ", ";
-            }
+        _voiceButton.onClick.RemoveListener(OnClicked);
+    }
 
-            ResultText.text += result.Phrases[i].Text;
+    private void OnClicked()
+    {
+        if (VoiceRecordingController.Instantce.TryToggleRecording(_text, out bool newState))
+        {
+            // NOTE: Best place for voice button idle/active effects
         }
-    	ResultText.text += "\n";
     }
 }
