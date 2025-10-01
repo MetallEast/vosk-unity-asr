@@ -1,0 +1,33 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: bbb281ee3bf0b054c82ac2347e9e782c, type: 3}
+  m_Name: RemoteVoiceModels
+  m_EditorClassIdentifier: 
+  m_GroupName: RemoteVoiceModels
+  m_GUID: 8da60227190167c4ba4d831abc6f59d9
+  m_SerializeEntries:
+  - m_GUID: 1374a828b99386d4fb848907640d9ec3
+    m_Address: vosk-model-small-en-us-0.15
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 35e1b3ddc85a57048b0e457eb490634b
+    m_Address: vosk-model-small-ru-0.22
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  m_ReadOnly: 0
+  m_Settings: {fileID: 11400000, guid: 659457efe3dd54844a8812bd29b7527e, type: 2}
+  m_SchemaSet:
+    m_Schemas:
+    - {fileID: 11400000, guid: bdf1f2f48e14a044d92b3a879011d208, type: 2}
+    - {fileID: 11400000, guid: 24975e0d4ee48eb4ba9d01bc58f82e65, type: 2}
