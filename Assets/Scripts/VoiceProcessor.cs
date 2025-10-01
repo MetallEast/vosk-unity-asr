@@ -11,11 +11,11 @@ public class VoiceProcessor : MonoBehaviour
     /// Indicates whether microphone is capturing or not
     /// </summary>
     public bool IsRecording
-    {
-        get { return _audioClip != null && Microphone.IsRecording(CurrentDeviceName); }
-    }
+        => _audioClip != null && Microphone.IsRecording(CurrentDeviceName);
 
+#if UNITY_EDITOR
     [SerializeField] private int MicrophoneIndex;
+#endif
 
     /// <summary>
     /// Sample rate of recorded audio
@@ -42,15 +42,17 @@ public class VoiceProcessor : MonoBehaviour
     /// </summary>
     public event Action OnRecordingStart;
 
+#if UNITY_EDITOR
     /// <summary>
     /// Available audio recording devices
     /// </summary>
-    public System.Collections.Generic.List<string> Devices { get; private set; }
+    [field: SerializeField] public System.Collections.Generic.List<string> Devices { get; private set; }
+#endif
 
     /// <summary>
     /// Index of selected audio recording device
     /// </summary>
-    public int CurrentDeviceIndex { get; private set; }
+    public int CurrentDeviceIndex { get; private set; } = -1;
 
     /// <summary>
     /// Name of selected audio recording device
@@ -60,8 +62,11 @@ public class VoiceProcessor : MonoBehaviour
         get
         {
             if (CurrentDeviceIndex < 0 || CurrentDeviceIndex >= Microphone.devices.Length)
+            {
                 return string.Empty;
-            return Devices[CurrentDeviceIndex];
+            }
+
+            return Microphone.devices[CurrentDeviceIndex];
         }
     }
 
@@ -83,13 +88,13 @@ public class VoiceProcessor : MonoBehaviour
     private AudioClip _audioClip;
     private event Action RestartRecording;
 
-    void Awake()
+    private void Awake()
     {
         UpdateDevices();
     }
 
 #if UNITY_EDITOR
-    void Update()
+    private void Update()
     {
         if (CurrentDeviceIndex != MicrophoneIndex)
         {
@@ -103,6 +108,7 @@ public class VoiceProcessor : MonoBehaviour
     /// </summary>
     public void UpdateDevices()
     {
+#if UNITY_EDITOR
         Devices = new System.Collections.Generic.List<string>();
         foreach (var device in Microphone.devices)
             Devices.Add(device);
@@ -115,8 +121,12 @@ public class VoiceProcessor : MonoBehaviour
         }
 
         CurrentDeviceIndex = MicrophoneIndex;
+#else
+        CurrentDeviceIndex = 0;
+#endif
     }
 
+#if UNITY_EDITOR
     /// <summary>
     /// Change audio recording device
     /// </summary>
@@ -146,6 +156,7 @@ public class VoiceProcessor : MonoBehaviour
             CurrentDeviceIndex = deviceIndex;
         }
     }
+#endif
 
     /// <summary>
     /// Start recording audio
@@ -290,23 +301,20 @@ public class VoiceProcessor : MonoBehaviour
                 }
 
                 // raise buffer event
-                if (OnFrameCaptured != null && _transmit)
-                    OnFrameCaptured.Invoke(pcmBuffer);
+                if (_transmit)
+                    OnFrameCaptured?.Invoke(pcmBuffer);
             }
             else
             {
                 if (_didDetect)
                 {
-                    if (OnRecordingStop != null)
-                        OnRecordingStop.Invoke();
+                    OnRecordingStop?.Invoke();
                     _didDetect = false;
                 }
             }
         }
 
-        if (OnRecordingStop != null)
-            OnRecordingStop.Invoke();
-        if (RestartRecording != null)
-            RestartRecording.Invoke();
+        OnRecordingStop?.Invoke();
+        RestartRecording?.Invoke();
     }
 }

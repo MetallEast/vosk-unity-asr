@@ -29,13 +29,13 @@ public class VoskDialogText : MonoBehaviour
 	bool cabbage_left;
 	bool man_left;
 
-    void Awake()
+    private void Awake()
     {
         VoskSpeechToText.OnTranscriptionResult += OnTranscriptionResult;
 		ResetState();
     }
 
-	void ResetState()
+	private void ResetState()
 	{
 		goat_left = true;
 		wolf_left = true;
@@ -43,23 +43,28 @@ public class VoskDialogText : MonoBehaviour
 		man_left = true;
 	}
 
-	void CheckState() {
+	private void CheckState()
+	{
 		if (goat_left && wolf_left && !man_left) {
 			AddFinalResponse("волк съел козу, начинай сначала");
 			return;
 		}
+
 		if (goat_left && cabbage_left && !man_left) {
 			AddFinalResponse("коза съела капусту, начинай сначала");
 			return;
 		}
+
 		if (!goat_left && !wolf_left && man_left) {
 			AddFinalResponse("волк съел козу, начинай сначала");
 			return;
 		}
+
 		if (!goat_left && !cabbage_left && man_left) {
 			AddFinalResponse("коза съела капусту, начинай сначала");
 			return;
 		}
+
 		if (!goat_left && !wolf_left && !cabbage_left && !man_left) {
 			AddFinalResponse("отлично получилось, давай ещё раз!");
 			return;

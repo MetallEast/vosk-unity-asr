@@ -2,205 +2,48 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
-using Ionic.Zip;
+using Cysharp.Threading.Tasks;
 using Unity.Profiling;
 using UnityEngine;
-using UnityEngine.Networking;
+using UnityEngine.AddressableAssets;
+using UnityEngine.ResourceManagement.AsyncOperations;
 using Vosk;
-using Cysharp.Threading.Tasks;
 
 public class VoskSpeechToText : MonoBehaviour
 {
-    [Tooltip("Location of the model, relative to the Streaming Assets folder.")]
-    public string ModelPath = "vosk-model-small-ru-0.22.zip";
+    private static readonly ProfilerMarker voskRecognizerCreateMarker = new("VoskRecognizer.Create");
+    private static readonly ProfilerMarker voskRecognizerReadMarker = new("VoskRecognizer.AcceptWaveform");
+
+    public Action<string> OnTranscriptionResult;
 
     [Tooltip("The source of the microphone input.")]
-    public VoiceProcessor VoiceProcessor;
+    [SerializeField] private VoiceProcessor _voiceProcessor;
 
     [Tooltip("The Max number of alternatives that will be processed.")]
-    public int MaxAlternatives = 3;
+    [SerializeField] private int _maxAlternatives = 3;
 
     [Tooltip("How long should we record before restarting?")]
-    public float MaxRecordLength = 5;
-
-    [Tooltip("Should the recognizer start when the application is launched?")]
-    public bool AutoStart = true;
+    [SerializeField] private float _maxRecordLength = 5;
 
     [Tooltip("The phrases that will be detected. If left empty, all words will be detected.")]
-    public List<string> KeyPhrases = new List<string>();
+    [SerializeField] private List<string> _keyPhrases;
 
     private Model _model;
     private VoskRecognizer _recognizer;
-    private bool _recognizerReady;
 
-    private readonly List<short> _buffer = new List<short>();
-    public Action<string> OnStatusUpdated;
-    public Action<string> OnTranscriptionResult;
-
+    private string _modelName;
     private string _decompressedModelPath;
-    private string _grammar = "";
+    private string _grammar = string.Empty;
 
-    private bool _isDecompressing;
     private bool _isInitializing;
     private bool _didInit;
     private bool _running;
+    private bool _recognizerReady;
 
-    private readonly ConcurrentQueue<short[]> _threadedBufferQueue = new ConcurrentQueue<short[]>();
-    private readonly ConcurrentQueue<string> _threadedResultQueue = new ConcurrentQueue<string>();
+    private readonly ConcurrentQueue<short[]> _threadedBufferQueue = new();
+    private readonly ConcurrentQueue<string> _threadedResultQueue = new();
 
-    static readonly ProfilerMarker voskRecognizerCreateMarker = new ProfilerMarker("VoskRecognizer.Create");
-    static readonly ProfilerMarker voskRecognizerReadMarker = new ProfilerMarker("VoskRecognizer.AcceptWaveform");
-
-    void Start()
-    {
-        if (AutoStart)
-        {
-            StartVoskStt().Forget();
-        }
-    }
-
-    public async UniTaskVoid StartVoskStt(List<string> keyPhrases = null, string modelPath = default, bool startMicrophone = false, int maxAlternatives = 3)
-    {
-        if (_isInitializing)
-        {
-            Debug.LogError("Initializing in progress!");
-            return;
-        }
-        if (_didInit)
-        {
-            Debug.LogError("Vosk has already been initialized!");
-            return;
-        }
-
-        if (!string.IsNullOrEmpty(modelPath))
-        {
-            ModelPath = modelPath;
-        }
-
-        if (keyPhrases != null)
-        {
-            KeyPhrases = keyPhrases;
-        }
-
-        MaxAlternatives = maxAlternatives;
-        await DoStartVoskStt(startMicrophone);
-    }
-
-    private async UniTask DoStartVoskStt(bool startMicrophone)
-    {
-        _isInitializing = true;
-        await WaitForMicrophoneInput();
-        await Decompress();
-
-        OnStatusUpdated?.Invoke("Loading Model from: " + _decompressedModelPath);
-        _model = new Model(_decompressedModelPath);
-
-        await UniTask.Yield();
-
-        OnStatusUpdated?.Invoke("Initialized");
-        VoiceProcessor.OnFrameCaptured += VoiceProcessorOnOnFrameCaptured;
-        VoiceProcessor.OnRecordingStop += VoiceProcessorOnOnRecordingStop;
-
-        if (startMicrophone)
-            VoiceProcessor.StartRecording();
-
-        _isInitializing = false;
-        _didInit = true;
-
-        ToggleRecording();
-    }
-
-    private void UpdateGrammar()
-    {
-        if (KeyPhrases.Count == 0)
-        {
-            _grammar = "";
-            return;
-        }
-
-        JSONArray keywords = new JSONArray();
-        foreach (string keyphrase in KeyPhrases)
-        {
-            keywords.Add(new JSONString(keyphrase.ToLower()));
-        }
-
-        keywords.Add(new JSONString("[unk]"));
-        _grammar = keywords.ToString();
-    }
-
-    private async UniTask Decompress()
-    {
-        if (!Path.HasExtension(ModelPath)
-            || Directory.Exists(Path.Combine(Application.persistentDataPath, Path.GetFileNameWithoutExtension(ModelPath))))
-        {
-            OnStatusUpdated?.Invoke("Using existing decompressed model.");
-            _decompressedModelPath = Path.Combine(Application.persistentDataPath, Path.GetFileNameWithoutExtension(ModelPath));
-            Debug.Log(_decompressedModelPath);
-            return;
-        }
-
-        OnStatusUpdated?.Invoke("Decompressing model...");
-        string dataPath = Path.Combine(Application.streamingAssetsPath, ModelPath);
-
-        Stream dataStream;
-        if (dataPath.Contains("://"))
-        {
-            UnityWebRequest www = UnityWebRequest.Get(dataPath);
-            await www.SendWebRequest();
-            dataStream = new MemoryStream(www.downloadHandler.data);
-        }
-        else
-        {
-            dataStream = File.OpenRead(dataPath);
-        }
-
-        var zipFile = ZipFile.Read(dataStream);
-        zipFile.ExtractProgress += ZipFileOnExtractProgress;
-        OnStatusUpdated?.Invoke("Reading Zip file");
-        zipFile.ExtractAll(Application.persistentDataPath);
-
-        await UniTask.WaitUntil(() => _isDecompressing);
-
-        _decompressedModelPath = Path.Combine(Application.persistentDataPath, Path.GetFileNameWithoutExtension(ModelPath));
-        OnStatusUpdated?.Invoke("Decompressing complete!");
-
-        await UniTask.Delay(1000);
-        zipFile.Dispose();
-    }
-
-    private void ZipFileOnExtractProgress(object sender, ExtractProgressEventArgs e)
-    {
-        if (e.EventType == ZipProgressEventType.Extracting_AfterExtractAll)
-        {
-            _isDecompressing = true;
-            _decompressedModelPath = e.ExtractLocation;
-        }
-    }
-
-    private async UniTask WaitForMicrophoneInput()
-    {
-        await UniTask.WaitUntil(() => Microphone.devices.Length > 0);
-    }
-
-    public void ToggleRecording()
-    {
-        Debug.Log("Toggle Recording");
-        if (!VoiceProcessor.IsRecording)
-        {
-            Debug.Log("Start Recording");
-            _running = true;
-            VoiceProcessor.StartRecording();
-            ThreadedWork().Forget();
-        }
-        else
-        {
-            Debug.Log("Stop Recording");
-            _running = false;
-            VoiceProcessor.StopRecording();
-        }
-    }
-
-    void Update()
+    private void Update()
     {
         if (_threadedResultQueue.TryDequeue(out string voiceResult))
         {
@@ -208,14 +51,129 @@ public class VoskSpeechToText : MonoBehaviour
         }
     }
 
-    private void VoiceProcessorOnOnFrameCaptured(short[] samples)
+    public async UniTask<bool> Initialize(string modelName, List<string> keyPhrases = null)
     {
-        _threadedBufferQueue.Enqueue(samples);
+        if (_isInitializing || _didInit)
+        {
+            Debug.LogError("Initializing in progress or already initialized");
+            return false;
+        }
+
+        _isInitializing = true;
+
+        _modelName = modelName;
+        _keyPhrases = keyPhrases;
+        _decompressedModelPath = Path.Combine(Application.persistentDataPath, _modelName);
+
+        await LoadModel();
+
+        Debug.Log("Loading Model from: " + _decompressedModelPath);
+        _model = new Model(_decompressedModelPath);
+
+        await UniTask.Yield();
+
+        _voiceProcessor.OnFrameCaptured += VoiceProcessorOnOnFrameCaptured;
+        _voiceProcessor.OnRecordingStop += VoiceProcessorOnOnRecordingStop;
+
+        _isInitializing = false;
+        _didInit = true;
+
+        Debug.Log("Initialized");
+
+        return true;
     }
 
-    private void VoiceProcessorOnOnRecordingStop()
+    private async UniTask<bool> LoadModel()
     {
-        Debug.Log("Stopped");
+        if (Directory.Exists(_decompressedModelPath))
+        {
+            // TODO: validate inner files (external files manipulations etc.)
+            Debug.Log($"Using existing decompressed model: {_decompressedModelPath}");
+            return true;
+        }
+
+        // NOTE: best place to show download suggestion window before going forward
+
+        return await DownloadModel();
+    }
+
+    private async UniTask<bool> DownloadModel()
+    {
+        Debug.Log($"Downloading model from Addressables {_modelName}");
+
+        AsyncOperationHandle<TextAsset> handle = new();
+
+        try
+        {
+            handle = Addressables.LoadAssetAsync<TextAsset>(_modelName);
+
+            await handle.ToUniTask();
+
+            if (handle.Status != AsyncOperationStatus.Succeeded)
+            {
+                Debug.LogError("Failed to load model from Addressables.");
+                return false;
+            }
+
+            var zipData = handle.Result.bytes;
+            var tempZipPath = Path.Combine(Application.temporaryCachePath, "temp.zip");
+
+            File.WriteAllBytes(tempZipPath, zipData);
+
+            Debug.Log("Extracting zip file...");
+            System.IO.Compression.ZipFile.ExtractToDirectory(tempZipPath, Application.persistentDataPath, true);
+
+            Debug.Log($"Decompression complete: {_decompressedModelPath}");
+
+            if (File.Exists(tempZipPath))
+            {
+                File.Delete(tempZipPath);
+                Debug.Log($"Deleted temp zip file: {tempZipPath}");
+            }
+
+            Debug.Log("Loading Model from: " + _decompressedModelPath);
+            Vosk.Vosk.SetLogLevel(0);
+
+            _model = new Model(_decompressedModelPath);
+            Debug.Log($"Model loaded: {_model != null}");
+
+            UpdateGrammar();
+
+            _recognizer = string.IsNullOrEmpty(_grammar)
+                ? new (_model, 16000.0f)
+                : new (_model, 16000.0f, _grammar);
+
+            if (_recognizer == null)
+            {
+                Debug.LogError("Failed to create initial VoskRecognizer!");
+                return false;
+            }
+
+            _recognizer.SetMaxAlternatives(_maxAlternatives);
+            _recognizer.SetWords(true);
+            _recognizerReady = true;
+            Debug.Log("Initial VoskRecognizer created and ready");
+
+            _voiceProcessor.OnFrameCaptured += VoiceProcessorOnOnFrameCaptured;
+            _voiceProcessor.OnRecordingStop += VoiceProcessorOnOnRecordingStop;
+
+            _didInit = true;
+            Debug.Log("Vosk initialization complete");
+
+            return true;
+        }
+        catch (Exception exc)
+        {
+            Debug.LogError($"DownloadModel failed: {exc.Message}");
+            return false;
+        }
+        finally
+        {
+            _isInitializing = false;
+
+            Addressables.Release(handle);
+            Debug.Log("Addressables handle released");
+        }
     }
 
     private async UniTaskVoid ThreadedWork()
@@ -233,7 +191,7 @@ public class VoskSpeechToText : MonoBehaviour
                 _recognizer = new VoskRecognizer(_model, 16000.0f, _grammar);
             }
 
-            _recognizer.SetMaxAlternatives(MaxAlternatives);
+            _recognizer.SetMaxAlternatives(_maxAlternatives);
             _recognizerReady = true;
             Debug.Log("Recognizer ready");
         }
@@ -256,5 +214,53 @@ public class VoskSpeechToText : MonoBehaviour
             }
         }
         voskRecognizerReadMarker.End();
+    }
+
+    private void UpdateGrammar()
+    {
+        if (_keyPhrases == null || _keyPhrases.Count == 0)
+        {
+            _grammar = string.Empty;
+
+            return;
+        }
+
+        var keywords = new JSONArray();
+
+        foreach (var keyphrase in _keyPhrases)
+        {
+            keywords.Add(new JSONString(keyphrase.ToLower()));
+        }
+
+        keywords.Add(new JSONString("[unk]"));
+        _grammar = keywords.ToString();
+    }
+
+    public void ToggleRecording()
+    {
+        Debug.Log("Toggle Recording");
+        if (!_voiceProcessor.IsRecording)
+        {
+            Debug.Log("Start Recording");
+            _running = true;
+            _voiceProcessor.StartRecording().Forget();
+            ThreadedWork().Forget();
+        }
+        else
+        {
+            Debug.Log("Stop Recording");
+            _running = false;
+            _voiceProcessor.StopRecording();
+        }
+    }
+
+    private void VoiceProcessorOnOnFrameCaptured(short[] samples)
+    {
+        _threadedBufferQueue.Enqueue(samples);
+    }
+
+    private void VoiceProcessorOnOnRecordingStop()
+    {
+        Debug.Log("Stopped");
     }
 }
