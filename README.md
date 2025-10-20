@@ -1,7 +1,8 @@
 # Vosk Unity (Mobile Adaptation)
 
 Big thanks to the contributors of [alphacep/vosk-unity-asr](https://github.com/alphacep/vosk-unity-asr)!  
-This repository is a variant of that implementation, adapted specifically for **Mobile platforms**.
+This repository is a variant of that implementation, adapted specifically for **Android platform**.
+Theoretically it should work on iOS too.
 
 ---
 
