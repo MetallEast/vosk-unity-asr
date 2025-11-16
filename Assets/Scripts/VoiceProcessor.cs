@@ -7,25 +7,18 @@ using UnityEngine;
 /// </summary>
 public class VoiceProcessor : MonoBehaviour
 {
+    private const int SampleRate = 16000;
+    private const int FrameLength = 512;
+
     /// <summary>
     /// Indicates whether microphone is capturing or not
     /// </summary>
     public bool IsRecording
-        => _audioClip != null && Microphone.IsRecording(CurrentDeviceName);
+        =>_audioClip != null && Microphone.IsRecording(CurrentDeviceName);
 
 #if UNITY_EDITOR
-    [SerializeField] private int MicrophoneIndex;
+    [SerializeField] private int MicrophoneIndex = 0;
 #endif
-
-    /// <summary>
-    /// Sample rate of recorded audio
-    /// </summary>
-    public int SampleRate { get; private set; }
-
-    /// <summary>
-    /// Size of audio frames that are delivered
-    /// </summary>
-    public int FrameLength { get; private set; }
 
     /// <summary>
     /// Event where frames of audio are delivered
@@ -42,13 +35,6 @@ public class VoiceProcessor : MonoBehaviour
     /// </summary>
     public event Action OnRecordingStart;
 
-#if UNITY_EDITOR
-    /// <summary>
-    /// Available audio recording devices
-    /// </summary>
-    [field: SerializeField] public System.Collections.Generic.List<string> Devices { get; private set; }
-#endif
-
     /// <summary>
     /// Index of selected audio recording device
     /// </summary>
@@ -57,18 +43,7 @@ public class VoiceProcessor : MonoBehaviour
     /// <summary>
     /// Name of selected audio recording device
     /// </summary>
-    public string CurrentDeviceName
-    {
-        get
-        {
-            if (CurrentDeviceIndex < 0 || CurrentDeviceIndex >= Microphone.devices.Length)
-            {
-                return string.Empty;
-            }
-
-            return Microphone.devices[CurrentDeviceIndex];
-        }
-    }
+    public string CurrentDeviceName { get; private set; } = string.Empty;
 
     [Header("Voice Detection Settings")]
     [SerializeField, Tooltip("The minimum volume to detect voice input for"), Range(0.0f, 1.0f)]
@@ -88,112 +63,39 @@ public class VoiceProcessor : MonoBehaviour
     private AudioClip _audioClip;
     private event Action RestartRecording;
 
-    private void Awake()
-    {
-        UpdateDevices();
-    }
-
-#if UNITY_EDITOR
-    private void Update()
-    {
-        if (CurrentDeviceIndex != MicrophoneIndex)
-        {
-            ChangeDevice(MicrophoneIndex);
-        }
-    }
-#endif
-
     /// <summary>
     /// Updates list of available audio devices
     /// </summary>
     public void UpdateDevices()
     {
-#if UNITY_EDITOR
-        Devices = new System.Collections.Generic.List<string>();
-        foreach (var device in Microphone.devices)
-            Devices.Add(device);
-
-        if (Devices == null || Devices.Count == 0)
+#if UNITY_ANDROID || UNITY_IOS
+        if (Microphone.devices.Length > 0)
         {
-            CurrentDeviceIndex = -1;
-            Debug.LogError("There is no valid recording device connected");
-            return;
+            CurrentDeviceName = Microphone.devices[0];
+            CurrentDeviceIndex = 0;
         }
-
-        CurrentDeviceIndex = MicrophoneIndex;
-#else
-        CurrentDeviceIndex = 0;
+#elif UNITY_EDITOR
+        if (Microphone.devices.Length > 0)
+        {
+            CurrentDeviceName = Microphone.devices[MicrophoneIndex];
+            CurrentDeviceIndex = MicrophoneIndex;
+        }
 #endif
     }
-
-#if UNITY_EDITOR
-    /// <summary>
-    /// Change audio recording device
-    /// </summary>
-    /// <param name="deviceIndex">Index of the new audio capture device</param>
-    public void ChangeDevice(int deviceIndex)
-    {
-        if (deviceIndex < 0 || deviceIndex >= Devices.Count)
-        {
-            Debug.LogError(string.Format("Specified device index {0} is not a valid recording device", deviceIndex));
-            return;
-        }
-
-        if (IsRecording)
-        {
-            // one time event to restart recording with the new device 
-            // the moment the last session has completed
-            RestartRecording += () =>
-            {
-                CurrentDeviceIndex = deviceIndex;
-                StartRecording(SampleRate, FrameLength).Forget();
-                RestartRecording = null;
-            };
-            StopRecording();
-        }
-        else
-        {
-            CurrentDeviceIndex = deviceIndex;
-        }
-    }
-#endif
 
     /// <summary>
     /// Start recording audio
     /// </summary>
-    /// <param name="sampleRate">Sample rate to record at</param>
-    /// <param name="frameSize">Size of audio frames to be delivered</param>
-    /// <param name="autoDetect">Should the audio continuously record based on the volume</param>
-    public async UniTask StartRecording(int sampleRate = 16000, int frameSize = 512, bool? autoDetect = null)
+    public async UniTask StartRecording()
     {
-        if (autoDetect != null)
-        {
-            _autoDetect = (bool)autoDetect;
-        }
-
         if (IsRecording)
         {
-            // if sample rate or frame size have changed, restart recording
-            if (sampleRate != SampleRate || frameSize != FrameLength)
-            {
-                RestartRecording += () =>
-                {
-                    StartRecording(SampleRate, FrameLength, autoDetect).Forget();
-                    RestartRecording = null;
-                };
-                StopRecording();
-            }
-
             return;
         }
 
-        SampleRate = sampleRate;
-        FrameLength = frameSize;
+        _audioClip = Microphone.Start(CurrentDeviceName, true, 1, SampleRate);
 
-        _audioClip = Microphone.Start(CurrentDeviceName, true, 1, sampleRate);
-
-        if (OnRecordingStart != null)
-            OnRecordingStart.Invoke();
+        OnRecordingStart?.Invoke();
 
         await RecordDataAsync();
     }
@@ -204,12 +106,18 @@ public class VoiceProcessor : MonoBehaviour
     public void StopRecording()
     {
         if (!IsRecording)
+        {
             return;
+        }
 
         Microphone.End(CurrentDeviceName);
         Destroy(_audioClip);
+
         _audioClip = null;
         _didDetect = false;
+        _timeAtSilenceBegan = 0;
+        _audioDetected = false;
+        _transmit = false;
     }
 
     /// <summary>
@@ -294,27 +202,47 @@ public class VoiceProcessor : MonoBehaviour
             {
                 _didDetect = true;
                 // converts to 16-bit int samples
-                short[] pcmBuffer = new short[sampleBuffer.Length];
-                for (int i = 0; i < FrameLength; i++)
+                var pcmBuffer = new short[sampleBuffer.Length];
+                for (var i = 0; i < FrameLength; i++)
                 {
                     pcmBuffer[i] = (short)Math.Floor(sampleBuffer[i] * short.MaxValue);
                 }
 
                 // raise buffer event
                 if (_transmit)
+                {
+                    //var processedBuffer = ApplyNoiseGate(pcmBuffer);
+
                     OnFrameCaptured?.Invoke(pcmBuffer);
+                }
             }
             else
             {
                 if (_didDetect)
                 {
+                    Debug.Log("Stop recording");
                     OnRecordingStop?.Invoke();
                     _didDetect = false;
                 }
             }
         }
 
+        Debug.Log("Stop recording");
         OnRecordingStop?.Invoke();
         RestartRecording?.Invoke();
+    }
+
+    private short[] ApplyNoiseGate(short[] input, float threshold = 0.005f)
+    {
+        var output = new short[input.Length];
+
+        for (var i = 0; i < input.Length; i++)
+        {
+            var normalized = input[i] / (float)short.MaxValue;
+
+            output[i] = Mathf.Abs(normalized) > threshold ? input[i] : (short)0;
+        }
+
+        return output;
     }
 }

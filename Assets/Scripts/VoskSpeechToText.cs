@@ -20,10 +20,7 @@ public class VoskSpeechToText : MonoBehaviour
     [SerializeField] private VoiceProcessor _voiceProcessor;
 
     [Tooltip("The Max number of alternatives that will be processed.")]
-    [SerializeField] private int _maxAlternatives = 3;
-
-    [Tooltip("How long should we record before restarting?")]
-    [SerializeField] private float _maxRecordLength = 5;
+    [SerializeField] private int _maxAlternatives = 5;
 
     [Tooltip("The phrases that will be detected. If left empty, all words will be detected.")]
     [SerializeField] private List<string> _keyPhrases;
@@ -35,8 +32,6 @@ public class VoskSpeechToText : MonoBehaviour
     private string _decompressedModelPath;
     private string _grammar = string.Empty;
 
-    private bool _isInitializing;
-    private bool _didInit;
     private bool _running;
     private bool _recognizerReady;
 
@@ -45,7 +40,7 @@ public class VoskSpeechToText : MonoBehaviour
 
     private void Update()
     {
-        if (_threadedResultQueue.TryDequeue(out string voiceResult))
+        if (_running && _threadedResultQueue.TryDequeue(out string voiceResult))
         {
             OnTranscriptionResult?.Invoke(voiceResult);
         }
@@ -53,19 +48,14 @@ public class VoskSpeechToText : MonoBehaviour
 
     public async UniTask<bool> Initialize(string modelName, List<string> keyPhrases = null)
     {
-        if (_isInitializing || _didInit)
-        {
-            Debug.LogError("Initializing in progress or already initialized");
-            return false;
-        }
-
-        _isInitializing = true;
-
         _modelName = modelName;
         _keyPhrases = keyPhrases;
         _decompressedModelPath = Path.Combine(Application.persistentDataPath, _modelName);
 
-        await LoadModel();
+        if (!await LoadModel())
+        {
+            return false;
+        }
 
         Debug.Log("Loading Model from: " + _decompressedModelPath);
         _model = new Model(_decompressedModelPath);
@@ -74,11 +64,6 @@ public class VoskSpeechToText : MonoBehaviour
 
         _voiceProcessor.OnFrameCaptured += VoiceProcessorOnOnFrameCaptured;
         _voiceProcessor.OnRecordingStop += VoiceProcessorOnOnRecordingStop;
-
-        _isInitializing = false;
-        _didInit = true;
-
-        Debug.Log("Initialized");
 
         return true;
     }
@@ -93,7 +78,6 @@ public class VoskSpeechToText : MonoBehaviour
         }
 
         // NOTE: best place to show download suggestion window before going forward
-
         return await DownloadModel();
     }
 
@@ -140,8 +124,8 @@ public class VoskSpeechToText : MonoBehaviour
             UpdateGrammar();
 
             _recognizer = string.IsNullOrEmpty(_grammar)
-                ? new (_model, 16000.0f)
-                : new (_model, 16000.0f, _grammar);
+                ? new(_model, 16000.0f)
+                : new(_model, 16000.0f, _grammar);
 
             if (_recognizer == null)
             {
@@ -152,13 +136,8 @@ public class VoskSpeechToText : MonoBehaviour
             _recognizer.SetMaxAlternatives(_maxAlternatives);
             _recognizer.SetWords(true);
             _recognizerReady = true;
-            Debug.Log("Initial VoskRecognizer created and ready");
 
-            _voiceProcessor.OnFrameCaptured += VoiceProcessorOnOnFrameCaptured;
-            _voiceProcessor.OnRecordingStop += VoiceProcessorOnOnRecordingStop;
-
-            _didInit = true;
-            Debug.Log("Vosk initialization complete");
+            Debug.Log("Initial VoskRecognizer created and ready. Vosk initialization complete");
 
             return true;
         }
@@ -169,8 +148,6 @@ public class VoskSpeechToText : MonoBehaviour
         }
         finally
         {
-            _isInitializing = false;
-
             Addressables.Release(handle);
             Debug.Log("Addressables handle released");
         }
@@ -207,6 +184,11 @@ public class VoskSpeechToText : MonoBehaviour
                     var result = _recognizer.Result();
                     _threadedResultQueue.Enqueue(result);
                 }
+                //else
+                //{
+                //    var partial = _recognizer.PartialResult();
+                //    _threadedResultQueue.Enqueue(partial);
+                //}
             }
             else
             {
@@ -238,7 +220,6 @@ public class VoskSpeechToText : MonoBehaviour
 
     public void ToggleRecording()
     {
-        Debug.Log("Toggle Recording");
         if (!_voiceProcessor.IsRecording)
         {
             Debug.Log("Start Recording");
@@ -251,6 +232,9 @@ public class VoskSpeechToText : MonoBehaviour
             Debug.Log("Stop Recording");
             _running = false;
             _voiceProcessor.StopRecording();
+
+            _threadedBufferQueue.Clear();
+            _threadedResultQueue.Clear();
         }
     }
 
@@ -261,6 +245,9 @@ public class VoskSpeechToText : MonoBehaviour
 
     private void VoiceProcessorOnOnRecordingStop()
     {
-        Debug.Log("Stopped");
+        Debug.Log("Recording stopped - clearing buffers and resetting recognizer");
+
+        _recognizer?.Reset();
+        _running = false;
     }
 }

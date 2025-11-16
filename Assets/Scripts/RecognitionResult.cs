@@ -20,7 +20,6 @@ public class RecognitionResult
             {
                 Phrases[i] = new RecognizedPhrase(alternatives[i].AsObject);
             }
-
         }
         else if (resultJson.HasKey(ResultKey))
         {
@@ -43,7 +42,7 @@ public class RecognizedPhrase
     public const string ConfidenceKey = "confidence";
     public const string TextKey = "text";
 
-    public string Text = "";
+    public string Text = string.Empty;
     public float Confidence = 0.0f;
 
     public RecognizedPhrase()
@@ -59,7 +58,6 @@ public class RecognizedPhrase
 
         if (json.HasKey(TextKey))
         {
-            //Vosk adds an extra space at the start of the string.
             Text = json[TextKey].Value.Trim();
         }
     }
